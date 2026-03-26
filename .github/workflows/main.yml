@@ -1,9 +1,11 @@
-name: Crypto Screener Bot
+name: Crypto Screener 1H 4H
 
 on:
   schedule:
-    - cron: '0 */4 * * *' # Berjalan setiap 4 jam
-  workflow_dispatch:      # Tombol manual run di GitHub
+    # Berjalan setiap jam pada menit ke-5
+    # Format Cron: (Menit) (Jam) (Hari) (Bulan) (Hari dalam Minggu)
+    - cron: '5 * * * *'
+  workflow_dispatch: # Tombol untuk menjalankan manual di tab Actions
 
 jobs:
   build:
@@ -15,13 +17,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v2
         with:
-          python-version: '3.12'
+          python-version: '3.9'
 
       - name: Install dependencies
         run: |
           pip install ccxt pandas pandas_ta requests
 
-      - name: Run Script
+      - name: Run Screener
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
