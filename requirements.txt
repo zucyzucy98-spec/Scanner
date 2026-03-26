@@ -2,3 +2,4 @@ ccxt
 pandas
 pandas_ta
 requests
+numpy<2.0.0
