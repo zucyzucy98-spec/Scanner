@@ -23,7 +23,7 @@ def scan_bitget():
     exchange = ccxt.bitget({'enableRateLimit': True, 'timeout': 30000})
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    send_telegram(f"🔍 *Screener Aktif ({now})*\nTimeframe: *1h & 4h* | Top 100 Koin")
+    send_telegram(f"🔍 *Screener Aktif ({now})*\nTimeframe: *1h & 4h* | Top 50 Koin")
 
     try:
         tickers = exchange.fetch_tickers()
@@ -32,7 +32,7 @@ def scan_bitget():
             if '/USDT' in t['symbol'] and t['quoteVolume'] is not None and t['quoteVolume'] >= MIN_VOLUME_USDT
         ]
         sorted_tickers = sorted(filtered_tickers, key=lambda x: x['quoteVolume'], reverse=True)
-        top_symbols = [t['symbol'] for t in sorted_tickers[:100]]
+        top_symbols = [t['symbol'] for t in sorted_tickers[:50]]
         
         signals_found = 0
         total_checked = 0
