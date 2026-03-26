@@ -6,11 +6,10 @@ import os
 import time
 from datetime import datetime
 
-# --- KONFIGURASI API ---
+# --- KONFIGURASI ---
 TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
-# Turunkan ke 500rb agar bot pasti mendapat koin saat market sepi
-MIN_VOLUME_USDT = 1000000 
+MIN_VOLUME_USDT = 500000 
 
 def send_telegram(message):
     if not TOKEN or not CHAT_ID: return
@@ -22,7 +21,6 @@ def send_telegram(message):
         print(f"Error Telegram: {e}")
 
 def scan_bitget():
-    # TAMBAHAN PENTING: Paksa ke Market SPOT
     exchange = ccxt.bitget({
         'enableRateLimit': True, 
         'timeout': 30000,
@@ -35,23 +33,14 @@ def scan_bitget():
     try:
         # 1. Ambil Ticker
         tickers = exchange.fetch_tickers()
-        print(f"Berhasil menarik {len(tickers)} ticker dari Bitget.")
-
-        # 2. Filter Koin (Hanya USDT & Volume > Min)
-        filtered = []
-        for symbol, t in tickers.items():
-            if '/USDT' in symbol and t.get('quoteVolume') is not None:
-                if t['quoteVolume'] >= MIN_VOLUME_USDT:
-                    filtered.append(t)
         
-        # Urutkan Volume Terbesar
+        # 2. Filter Koin
+        filtered = [t for t in tickers.values() if '/USDT' in t['symbol'] and t.get('quoteVolume', 0) >= MIN_VOLUME_USDT]
         sorted_tickers = sorted(filtered, key=lambda x: x['quoteVolume'], reverse=True)
         top_symbols = [t['symbol'] for t in sorted_tickers[:50]]
         
-        print(f"Koin lolos filter volume: {len(top_symbols)}")
-
         if not top_symbols:
-            send_telegram(f"⚠️ *Peringatan:* Tidak ada koin yang lolos filter volume ${MIN_VOLUME_USDT:,}")
+            send_telegram("⚠️ Tidak ada koin lolos filter volume.")
             return
 
         signals_found = 0
@@ -60,33 +49,55 @@ def scan_bitget():
         for symbol in top_symbols:
             for tf in ['1h', '4h']:
                 try:
+                    # Ambil data lebih banyak (100) untuk memastikan indikator terisi
                     bars = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=100)
-                    if len(bars) < 35: continue 
+                    
+                    # --- VALIDATION GATE 1: Cek kecukupan data ---
+                    if not bars or len(bars) < 35:
+                        print(f"⏩ Skip {symbol} {tf}: Data tidak cukup ({len(bars)} candle)")
+                        continue 
                     
                     df = pd.DataFrame(bars, columns=['ts', 'o', 'h', 'l', 'c', 'v'])
                     
-                    # --- INDIKATOR ---
+                    # --- VALIDATION GATE 2: Hitung Indikator ---
+                    # Hitung BB
                     bb = ta.bbands(df['c'], length=20, std=2)
-                    df['bb_width'] = (bb['BBU_20_2.0'] - bb['BBL_20_2.0']) / bb['BBM_20_2.0']
+                    # Hitung RSI
+                    rsi_series = ta.rsi(df['c'], length=14)
+                    # Hitung MACD
+                    macd_df = ta.macd(df['c'])
+
+                    # Pastikan semua kolom indikator berhasil dibuat
+                    if bb is None or rsi_series is None or macd_df is None:
+                        print(f"⏩ Skip {symbol} {tf}: Gagal kalkulasi indikator")
+                        continue
+
+                    # Ambil nama kolom secara dinamis (menghindari error 'BBU_20_2.0')
+                    u_band = bb.columns[2] # Biasanya BBU_20_2.0
+                    l_band = bb.columns[0] # Biasanya BBL_20_2.0
+                    m_band = bb.columns[1] # Biasanya BBM_20_2.0
+                    macd_h  = macd_df.columns[1] # Biasanya MACDh_12_26_9
+
+                    # --- MASUKKAN KE DATAFRAME ---
+                    df['bb_width'] = (bb[u_band] - bb[l_band]) / bb[m_band]
                     df['vol_sma'] = ta.sma(df['v'], length=20)
-                    df['rsi'] = ta.rsi(df['c'], length=14)
-                    macd = ta.macd(df['c'])
+                    df['rsi'] = rsi_series
+                    df['macd_h'] = macd_df[macd_h]
                     
-                    # --- LOGIKA ---
+                    # --- LOGIKA STRATEGI ---
                     last = -1
                     is_squeeze = df['bb_width'].iloc[last] < df['bb_width'].tail(15).mean()
                     vol_breakout = df['v'].iloc[last] > (df['vol_sma'].iloc[last] * 1.5)
-                    macd_bullish = macd['MACDh_12_26_9'].iloc[last] > 0
+                    macd_bullish = df['macd_h'].iloc[last] > 0
                     not_overbought = df['rsi'].iloc[last] < 70
 
                     if is_squeeze and vol_breakout and macd_bullish and not_overbought:
                         curr_vol = [t['quoteVolume'] for t in sorted_tickers if t['symbol'] == symbol][0]
                         msg = (
-                            f"🎯 *NEW SETUP FOUND*\n\n"
+                            f"🎯 *SETUP FOUND*\n\n"
                             f"💎 *Asset:* `{symbol}`\n"
                             f"⏱️ *TF:* `{tf}` | *RSI:* `{df['rsi'].iloc[last]:.2f}`\n"
                             f"💰 *Vol 24h:* `${curr_vol/1000000:.1f}M`\n"
-                            f"🔊 *Spike:* `{(df['v'].iloc[last]/df['vol_sma'].iloc[last]):.1f}x` \n\n"
                             f"🔗 [Chart](https://www.tradingview.com/chart/?symbol=BITGET:{symbol.replace('/', '')})"
                         )
                         send_telegram(msg)
@@ -96,14 +107,15 @@ def scan_bitget():
                     time.sleep(0.2) 
 
                 except Exception as e:
-                    print(f"Gagal memproses {symbol} {tf}: {e}")
+                    print(f"⚠️ Kesalahan pada {symbol} {tf}: {str(e)}")
+                    continue # Lanjut ke koin berikutnya jika satu error
 
-        # --- LAPORAN AKHIR ---
+        # --- LAPORAN ---
         finish_now = datetime.now().strftime('%H:%M:%S')
         send_telegram(f"✅ *Scan Selesai ({finish_now})*\nTotal Chart: `{total_checked}`\nSinyal: `{signals_found}`")
 
     except Exception as e:
-        send_telegram(f"❌ *Bot Error:* {str(e)}")
+        send_telegram(f"❌ *Global Error:* {str(e)}")
 
 if __name__ == "__main__":
     scan_bitget()
