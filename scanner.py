@@ -10,7 +10,7 @@ from datetime import datetime
 TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
 # Turunkan ke 500rb agar bot pasti mendapat koin saat market sepi
-MIN_VOLUME_USDT = 500000 
+MIN_VOLUME_USDT = 1000000 
 
 def send_telegram(message):
     if not TOKEN or not CHAT_ID: return
