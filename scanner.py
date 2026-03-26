@@ -6,56 +6,60 @@ import os
 import time
 from datetime import datetime
 
-# --- KONFIGURASI API (GitHub Secrets) ---
+# --- KONFIGURASI API ---
 TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
-MIN_VOLUME_USDT = 1000000 # Filter Minimal 1 Juta USDT
+# Turunkan ke 500rb agar bot pasti mendapat koin saat market sepi
+MIN_VOLUME_USDT = 500000 
 
 def send_telegram(message):
-    if not TOKEN or not CHAT_ID:
-        print("ERROR: Token atau Chat ID tidak ditemukan di Environment Variables!")
-        return
+    if not TOKEN or not CHAT_ID: return
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        params = {
-            "chat_id": CHAT_ID, 
-            "text": message, 
-            "parse_mode": "Markdown", 
-            "disable_web_page_preview": True
-        }
-        res = requests.get(url, params=params)
-        if res.status_code != 200:
-            print(f"Telegram Error: {res.text}")
+        params = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown", "disable_web_page_preview": True}
+        requests.get(url, params=params)
     except Exception as e:
-        print(f"Error API Telegram: {e}")
+        print(f"Error Telegram: {e}")
 
 def scan_bitget():
-    # Inisialisasi Exchange
-    exchange = ccxt.bitget({'enableRateLimit': True, 'timeout': 30000})
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    # TAMBAHAN PENTING: Paksa ke Market SPOT
+    exchange = ccxt.bitget({
+        'enableRateLimit': True, 
+        'timeout': 30000,
+        'options': {'defaultType': 'spot'} 
+    })
     
-    # --- STEP 1: TEST KONEKSI ---
-    send_telegram(f"🚀 *Screener Started ({now})*\nMemulai pemindaian 50 koin teratas...")
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{now}] Memulai pemindaian...")
 
     try:
-        # 2. Ambil Ticker & Filter Volume
+        # 1. Ambil Ticker
         tickers = exchange.fetch_tickers()
-        filtered = [
-            t for t in tickers.values() 
-            if '/USDT' in t['symbol'] and t['quoteVolume'] is not None and t['quoteVolume'] >= MIN_VOLUME_USDT
-        ]
-        sorted_tickers = sorted(filtered, key=lambda x: x['quoteVolume'], reverse=True)
+        print(f"Berhasil menarik {len(tickers)} ticker dari Bitget.")
+
+        # 2. Filter Koin (Hanya USDT & Volume > Min)
+        filtered = []
+        for symbol, t in tickers.items():
+            if '/USDT' in symbol and t.get('quoteVolume') is not None:
+                if t['quoteVolume'] >= MIN_VOLUME_USDT:
+                    filtered.append(t)
         
-        # Ambil Top 50 koin
+        # Urutkan Volume Terbesar
+        sorted_tickers = sorted(filtered, key=lambda x: x['quoteVolume'], reverse=True)
         top_symbols = [t['symbol'] for t in sorted_tickers[:50]]
         
+        print(f"Koin lolos filter volume: {len(top_symbols)}")
+
+        if not top_symbols:
+            send_telegram(f"⚠️ *Peringatan:* Tidak ada koin yang lolos filter volume ${MIN_VOLUME_USDT:,}")
+            return
+
         signals_found = 0
         total_checked = 0
 
         for symbol in top_symbols:
             for tf in ['1h', '4h']:
                 try:
-                    # Ambil data OHLCV
                     bars = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=100)
                     if len(bars) < 35: continue 
                     
@@ -78,7 +82,7 @@ def scan_bitget():
                     if is_squeeze and vol_breakout and macd_bullish and not_overbought:
                         curr_vol = [t['quoteVolume'] for t in sorted_tickers if t['symbol'] == symbol][0]
                         msg = (
-                            f"🎯 *SETUP FOUND*\n\n"
+                            f"🎯 *NEW SETUP FOUND*\n\n"
                             f"💎 *Asset:* `{symbol}`\n"
                             f"⏱️ *TF:* `{tf}` | *RSI:* `{df['rsi'].iloc[last]:.2f}`\n"
                             f"💰 *Vol 24h:* `${curr_vol/1000000:.1f}M`\n"
@@ -89,12 +93,12 @@ def scan_bitget():
                         signals_found += 1
                     
                     total_checked += 1
-                    time.sleep(0.15) # Jeda lebih cepat untuk 50 koin
+                    time.sleep(0.2) 
 
                 except Exception as e:
-                    print(f"Error {symbol}: {e}")
+                    print(f"Gagal memproses {symbol} {tf}: {e}")
 
-        # --- STEP 2: FINISH REPORT ---
+        # --- LAPORAN AKHIR ---
         finish_now = datetime.now().strftime('%H:%M:%S')
         send_telegram(f"✅ *Scan Selesai ({finish_now})*\nTotal Chart: `{total_checked}`\nSinyal: `{signals_found}`")
 
