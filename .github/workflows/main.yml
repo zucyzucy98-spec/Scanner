@@ -1,0 +1,28 @@
+name: Crypto Screener Bot
+
+on:
+  schedule:
+    - cron: '0 */4 * * *' # Berjalan setiap 4 jam
+  workflow_dispatch:      # Tombol manual run di GitHub
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install ccxt pandas pandas_ta requests
+
+      - name: Run Script
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python scanner.py
